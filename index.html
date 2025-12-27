@@ -125,7 +125,7 @@
     <p><strong>Mobile Control Settings:</strong></p>
     <div class="custom-grid">
       <div class="custom-item"><label>Joystick Position:</label> <select id="joystickPosition"><option value="left">Left</option><option value="right">Right</option></select></div>
-      <div class="custom-item"><label>Buttons Position:</label> <select id="buttonsPosition"><option value="left">Left</option><option value="right">Right</option></select></div>
+      <div class="custom-item"><label>Buttons Position:</label> <select id="buttonsPosition"><option value="left">Left</option><option value="right" selected>Right</option></select></div>
     </div>
   </div>
   <button id="startBtn">Start Race</button>
@@ -144,7 +144,7 @@
   <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="0.2">
 </div>
 <div id="countdown">3</div>
-<div id="hud">Speed: <span id="speed">0</span> km/h | Hits: <span id="hits">0</span> | Powerups: <span id="powerups"></span> | Shield: <span id="shield">No</span> | Progress: <span id="progress">0</span>% | Nitro: <span id="nitroBar">100</span>% | Position: <span id="position">1</span></div>
+<div id="hud">Speed: <span id="speed">0</span> km/h | Damage: <span id="damage">0</span>% | Hits: <span id="hits">0</span> | Powerups: <span id="powerups"></span> | Shield: <span id="shield">No</span> | Progress: <span id="progress">0</span>% | Nitro: <span id="nitroBar">100</span>% | Position: <span id="position">1</span></div>
 <div id="miniMap">
   <canvas id="mapCanvas" width="200" height="200"></canvas>
 </div>
@@ -232,7 +232,9 @@ function updatePreview() {
     const selectedExhaust = document.getElementById('exhaustType').value;
     const selectedAccessory = document.getElementById('headAccessory').value;
     const tempCar = createCar(selectedColor, selectedSpoiler, selectedWheels, selectedExhaust, selectedAccessory, 'Preview');
-    previewScene.add(tempCar);
+    if (tempCar && tempCar.isObject3D) {
+      previewScene.add(tempCar);
+    }
     tempCar.rotation.y = Math.PI / 4;
     previewRenderer.render(previewScene, previewCamera);
   } catch(e) {
@@ -347,6 +349,112 @@ function stopMenuMusic() {
   }
 }
 
+// Hit visual effects
+function createHitEffect(position) {
+  // Create spark particles
+  for(let i = 0; i < 10; i++){
+    const particle = new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshStandardMaterial({ color: 0xffaa00, emissive: 0xff6600 }));
+    particle.position.copy(position).add(new THREE.Vector3((Math.random()-0.5)*2, Math.random()*2, (Math.random()-0.5)*2));
+    particle.userData = { life: 1.0, velocity: new THREE.Vector3((Math.random()-0.5)*10, Math.random()*10, (Math.random()-0.5)*10) };
+    scene.add(particle);
+    trailParticles.push(particle); // Reuse trailParticles for cleanup
+  }
+}
+
+function flashScreen(color, duration) {
+  // Create a temporary overlay
+  const overlay = document.createElement('div');
+  overlay.style.position = 'fixed';
+  overlay.style.top = '0';
+  overlay.style.left = '0';
+  overlay.style.width = '100%';
+  overlay.style.height = '100%';
+  overlay.style.backgroundColor = `rgba(${color >> 16}, ${(color >> 8) & 255}, ${color & 255}, 0.3)`;
+  overlay.style.pointerEvents = 'none';
+  overlay.style.zIndex = '50';
+  document.body.appendChild(overlay);
+  
+  setTimeout(() => {
+    document.body.removeChild(overlay);
+  }, duration * 1000);
+}
+
+// Damage visualization
+function applyCarDamage(car, damageAmount) {
+  car.userData.damage = Math.min(car.userData.maxDamage, car.userData.damage + damageAmount);
+  
+  // Visual damage based on damage level
+  const damageLevel = car.userData.damage / car.userData.maxDamage;
+  
+  // Add dents and scratches
+  if(damageLevel > 0.2 && car.userData.damageParts.length < 5) {
+    const dent = new THREE.Mesh(
+      new THREE.SphereGeometry(0.1 + Math.random()*0.2, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x222222 })
+    );
+    dent.position.set(
+      (Math.random()-0.5)*2,
+      0.3 + Math.random()*0.8,
+      (Math.random()-0.5)*4
+    );
+    dent.scale.setScalar(0.5);
+    car.add(dent);
+    car.userData.damageParts.push(dent);
+  }
+  
+  // Change material properties for damaged look
+  car.traverse((child) => {
+    if(child.isMesh && child.material) {
+      if(damageLevel > 0.5) {
+        child.material.color.multiplyScalar(0.9); // Darken
+      }
+      if(damageLevel > 0.8) {
+        child.material.metalness *= 0.8; // Less shiny
+        child.material.roughness += 0.2; // More rough
+      }
+    }
+  });
+}
+
+function applyObstacleDamage(obstacle, damageAmount) {
+  obstacle.userData.damage = Math.min(obstacle.userData.maxDamage, obstacle.userData.damage + damageAmount);
+  
+  const damageLevel = obstacle.userData.damage / obstacle.userData.maxDamage;
+  
+  // Visual damage effects
+  if(damageLevel > 0.3) {
+    obstacle.material.color.multiplyScalar(0.9);
+  }
+  if(damageLevel > 0.6) {
+    obstacle.material.transparent = true;
+    obstacle.material.opacity = 0.7;
+  }
+  if(damageLevel >= 1.0) {
+    // Destroy obstacle
+    scene.remove(obstacle);
+    obstacles.splice(obstacles.indexOf(obstacle), 1);
+    // Add debris
+    for(let i=0; i<3; i++) {
+      const debris = new THREE.Mesh(
+        new THREE.BoxGeometry(0.2, 0.2, 0.2),
+        new THREE.MeshStandardMaterial({ color: obstacle.material.color })
+      );
+      debris.position.copy(obstacle.position).add(new THREE.Vector3(
+        (Math.random()-0.5)*2,
+        Math.random()*2,
+        (Math.random()-0.5)*2
+      ));
+      debris.userData = { life: 2.0, velocity: new THREE.Vector3(
+        (Math.random()-0.5)*5,
+        Math.random()*5,
+        (Math.random()-0.5)*5
+      )};
+      scene.add(debris);
+      trailParticles.push(debris);
+    }
+  }
+}
+
 function startMenuMusic() {
   if (soundEnabled && titleMusics.length > 0 && !menuMusic) {
     playTitleSong(currentTitleIndex);
@@ -375,7 +483,7 @@ hitSound = createAudio('hit.mp3');
 
 // Volume control
 function updateVolume() {
-  [raceFanfare, loseMusic, winMusic, itemSound, countdownSound, hitSound, ...titleMusics, ...raceMusics].forEach(audio => {
+  [raceFanfare, loseMusic, winMusic, itemSound, countdownSound, ...titleMusics, ...raceMusics].forEach(audio => {
     if (audio) audio.volume = volume;
   });
   if (currentMusic) currentMusic.volume = volume;
@@ -485,13 +593,13 @@ window.addEventListener('keydown', (e) => {
       joystickEl.style.left = 'auto';
       joystickEl.style.right = '20px';
       buttonsEl.style.left = 'auto';
-      buttonsEl.style.right = '20px';
+      buttonsEl.style.right = '140px'; // Offset to avoid overlap
       buttonsDiv.style.marginLeft = '20px';
     } else {
       // Switch to left
       joystickEl.style.left = '20px';
       joystickEl.style.right = 'auto';
-      buttonsEl.style.left = '20px';
+      buttonsEl.style.left = '140px'; // Offset to avoid overlap
       buttonsEl.style.right = 'auto';
       buttonsDiv.style.marginLeft = '0';
     }
@@ -598,47 +706,139 @@ scene.add(finishLine);
 const totalDistance = 2005; // From start (5) to finish (-2000)
 
 /* =====================
-   ENHANCED SCENERY
+   ENHANCED REALISTIC SCENERY
 ===================== */
-// Mountains in background
-for(let i=0; i<10; i++){
+// Mountains in background - more varied
+for(let i=0; i<15; i++){
+  const height = 80 + Math.random()*120;
   const mountain = new THREE.Mesh(
-    new THREE.ConeGeometry(50 + Math.random()*50, 100 + Math.random()*100, 8),
-    new THREE.MeshStandardMaterial({ color:0x8B4513 })
+    new THREE.ConeGeometry(40 + Math.random()*60, height, 6 + Math.floor(Math.random()*4)),
+    new THREE.MeshStandardMaterial({ color: 0x8B4513 + Math.random()*0x222222 })
   );
-  mountain.position.set((Math.random()-0.5)*500, 50, -500 - i*200);
+  mountain.position.set((Math.random()-0.5)*800, height/2, -600 - i*300);
   scene.add(mountain);
+  
+  // Add snow caps to taller mountains
+  if(height > 120) {
+    const snowCap = new THREE.Mesh(
+      new THREE.ConeGeometry(20, 20, 6),
+      new THREE.MeshStandardMaterial({ color: 0xFFFFFF })
+    );
+    snowCap.position.set(mountain.position.x, mountain.position.y + height/2 - 10, mountain.position.z);
+    scene.add(snowCap);
+  }
 }
 
-// Lakes
-for(let i=0; i<5; i++){
+// Lakes and water features - more realistic
+for(let i=0; i<8; i++){
+  const size = 20 + Math.random()*40;
   const lake = new THREE.Mesh(
-    new THREE.CircleGeometry(30 + Math.random()*20, 16),
-    new THREE.MeshStandardMaterial({ color:0x4682B4, transparent:true, opacity:0.8 })
+    new THREE.CircleGeometry(size, 32),
+    new THREE.MeshStandardMaterial({ color:0x4682B4, transparent:true, opacity:0.6 })
   );
   lake.rotation.x = -Math.PI/2;
-  lake.position.set((Math.random()-0.5)*200, 0.01, -300 - i*400);
+  lake.position.set((Math.random()-0.5)*400, 0.01, -400 - i*500);
   scene.add(lake);
+  
+  // Add some rocks around lakes
+  for(let j=0; j<3; j++) {
+    const rock = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(2 + Math.random()*3),
+      new THREE.MeshStandardMaterial({ color: 0x696969 })
+    );
+    rock.position.set(
+      lake.position.x + (Math.random()-0.5)*size*1.5,
+      1,
+      lake.position.z + (Math.random()-0.5)*size*1.5
+    );
+    scene.add(rock);
+  }
 }
 
-// City section (near start) - more varied
-for(let i=0; i<50; i++){
+// City section (near start) - more detailed buildings
+for(let i=0; i<60; i++){
+  const width = 3 + Math.random()*8;
+  const height = 8 + Math.random()*40;
+  const depth = 3 + Math.random()*8;
   const building = new THREE.Mesh(
-    new THREE.BoxGeometry(4 + Math.random()*6, 10 + Math.random()*30, 4 + Math.random()*6),
+    new THREE.BoxGeometry(width, height, depth),
     new THREE.MeshStandardMaterial({ color: Math.random()*0xffffff })
   );
-  building.position.set((Math.random()-0.5)*150, building.geometry.parameters.height/2, -i*20);
+  building.position.set((Math.random()-0.5)*200, height/2, -i*25);
+  
+  // Add windows to buildings
+  if(height > 15) {
+    for(let w=0; w<Math.floor(width/2); w++) {
+      for(let h=0; h<Math.floor(height/4); h++) {
+        const window = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.8, 0.8),
+          new THREE.MeshStandardMaterial({ color: 0xFFFF99, emissive: 0x444444 })
+        );
+        window.position.set(
+          building.position.x - width/2 + w*2 + 1,
+          building.position.y - height/2 + h*4 + 2,
+          building.position.z + depth/2 + 0.01
+        );
+        scene.add(window);
+      }
+    }
+  }
+  
   scene.add(building);
 }
 
-// Countryside section (middle) - more trees
-for(let i=30; i<100; i++){
-  const tree = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.5, 0.5, 5),
-    new THREE.MeshStandardMaterial({ color:0x228B22 })
+// Countryside section (middle) - more realistic trees and vegetation
+for(let i=30; i<120; i++){
+  const treeType = Math.random();
+  let trunk, foliage;
+  
+  if(treeType < 0.6) {
+    // Pine tree
+    trunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.5, 3),
+      new THREE.MeshStandardMaterial({ color:0x8B4513 })
+    );
+    foliage = new THREE.Mesh(
+      new THREE.ConeGeometry(2, 4, 8),
+      new THREE.MeshStandardMaterial({ color:0x228B22 })
+    );
+    foliage.position.y = 3.5;
+  } else {
+    // Deciduous tree
+    trunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.4, 0.6, 4),
+      new THREE.MeshStandardMaterial({ color:0x8B4513 })
+    );
+    foliage = new THREE.Mesh(
+      new THREE.SphereGeometry(2.5, 8, 6),
+      new THREE.MeshStandardMaterial({ color:0x32CD32 })
+    );
+    foliage.position.y = 4;
+  }
+  
+  trunk.position.set((Math.random()-0.5)*150, 2, -i*18);
+  foliage.position.add(trunk.position);
+  scene.add(trunk);
+  scene.add(foliage);
+}
+
+// Highway signs and billboards
+for(let i=0; i<20; i++){
+  const sign = new THREE.Mesh(
+    new THREE.PlaneGeometry(4, 2),
+    new THREE.MeshStandardMaterial({ color: 0xFFFFFF, side: THREE.DoubleSide })
   );
-  tree.position.set((Math.random()-0.5)*120, 2.5, -i*15);
-  scene.add(tree);
+  sign.position.set((Math.random()-0.5)*30, 4, -i*50);
+  sign.rotation.y = Math.random() * Math.PI;
+  scene.add(sign);
+  
+  // Add sign post
+  const post = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.1, 0.1, 4),
+    new THREE.MeshStandardMaterial({ color: 0x333333 })
+  );
+  post.position.set(sign.position.x, 2, sign.position.z);
+  scene.add(post);
 }
 
 // Tunnel section (near finish)
@@ -856,18 +1056,25 @@ function createCar(color, spoiler, wheels, exhaust, accessory = 'none', name = '
     car.add(antler2);
   }
 
-  car.userData = { name: name };
+  car.userData = { 
+    name: name,
+    damage: 0,
+    maxDamage: 100,
+    damageParts: []
+  };
 
   car.position.set(0, 0.35, 0); // Start at start line
   return car;
 }
 
 const physics = {
-  maxSpeed:350,
-  accel:120,
-  turn:2.5,
-  friction:0.99,
-  driftGrip:0.94
+  maxSpeed: 350,
+  accel: 120,
+  turn: 2.5,
+  friction: 0.985, // More realistic friction
+  driftGrip: 0.94,
+  bounce: 0.7, // Bounce factor for collisions
+  damageSpeedReduction: 0.02 // Speed reduction per damage point
 };
 
 /* =====================
@@ -913,7 +1120,7 @@ const nitroBtn = document.getElementById('nitroBtn');
 // Device orientation for tilt steering
 window.addEventListener('deviceorientation', (e) => {
   if (e.gamma !== null) {
-    tiltX = e.gamma / 45; // Normalize to -1 to 1
+    tiltX = - e.gamma / 45; // Normalize to -1 to 1, inverted
     tiltX = Math.max(-1, Math.min(1, tiltX));
   }
 });
@@ -951,7 +1158,7 @@ function updateJoystick(touch) {
   const rect = joystick.getBoundingClientRect();
   const centerX = rect.left + rect.width / 2;
   const centerY = rect.top + rect.height / 2;
-  let newJoystickX = (touch.clientX - centerX) / (rect.width / 2);
+  let newJoystickX = - (touch.clientX - centerX) / (rect.width / 2);
   let newJoystickY = (touch.clientY - centerY) / (rect.height / 2);
   
   // Add deadzone
@@ -1061,11 +1268,29 @@ function startGame(){
   const mobileButtons = document.getElementById('mobileButtons');
   mobileControls.style.left = joystickPos === 'left' ? '20px' : 'auto';
   mobileControls.style.right = joystickPos === 'right' ? '20px' : 'auto';
-  mobileButtons.style.left = buttonsPos === 'left' ? '20px' : 'auto';
-  mobileButtons.style.right = buttonsPos === 'right' ? '20px' : 'auto';
-  // Adjust margin for buttons if on left
-  document.getElementById('buttons').style.marginLeft = buttonsPos === 'left' ? '0' : '20px';
+  
+  // Position buttons to avoid overlap with joystick
+  if (joystickPos === buttonsPos) {
+    // If same side, offset buttons
+    if (buttonsPos === 'left') {
+      mobileButtons.style.left = '140px'; // 20px margin + 100px joystick + 20px gap
+      mobileButtons.style.right = 'auto';
+      document.getElementById('buttons').style.marginLeft = '0';
+    } else {
+      mobileButtons.style.right = '140px';
+      mobileButtons.style.left = 'auto';
+      document.getElementById('buttons').style.marginLeft = '20px';
+    }
+  } else {
+    // Different sides, normal positioning
+    mobileButtons.style.left = buttonsPos === 'left' ? '20px' : 'auto';
+    mobileButtons.style.right = buttonsPos === 'right' ? '20px' : 'auto';
+    document.getElementById('buttons').style.marginLeft = buttonsPos === 'left' ? '0' : '20px';
+  }
   scene.add(car);
+  if (!car || !car.isObject3D) {
+    console.error('Car is not a valid THREE.Object3D');
+  }
   playerLabel = document.createElement('div');
   playerLabel.textContent = selectedName;
   playerLabel.style.position = 'absolute';
@@ -1080,20 +1305,91 @@ function startGame(){
   // Get selected map
   const selectedMap = document.getElementById('mapType').value;
 
-  // Create obstacles based on map
+  // Create obstacles based on map - more varied and realistic
   obstacles.length = 0; // Clear existing
   let obstacleColor = 0x333333;
-  if(selectedMap === 'desert') obstacleColor = 0x8B4513;
-  else if(selectedMap === 'city') obstacleColor = 0x666666;
-  else if(selectedMap === 'mountain') obstacleColor = 0x8B7355;
-  else if(selectedMap === 'neon') obstacleColor = 0xFF00FF;
-  else if(selectedMap === 'snow') obstacleColor = 0xE0E0E0;
+  let obstacleTypes = ['cone', 'barrel', 'debris', 'guardrail'];
+  
+  if(selectedMap === 'desert') {
+    obstacleColor = 0x8B4513;
+    obstacleTypes = ['cactus', 'rock', 'barrel', 'debris'];
+  } else if(selectedMap === 'city') {
+    obstacleColor = 0x666666;
+    obstacleTypes = ['cone', 'barrel', 'debris', 'guardrail', 'dumpster'];
+  } else if(selectedMap === 'mountain') {
+    obstacleColor = 0x8B7355;
+    obstacleTypes = ['rock', 'tree', 'boulder', 'debris'];
+  } else if(selectedMap === 'neon') {
+    obstacleColor = 0xFF00FF;
+    obstacleTypes = ['cone', 'barrel', 'debris', 'neon_sign'];
+  } else if(selectedMap === 'snow') {
+    obstacleColor = 0xE0E0E0;
+    obstacleTypes = ['snowbank', 'ice', 'barrel', 'debris'];
+  }
+  
   for(let i=0;i<25;i++){
-    const o = new THREE.Mesh(
-      new THREE.BoxGeometry(2,2,4),
-      new THREE.MeshStandardMaterial({ color:obstacleColor })
-    );
-    o.position.set((Math.random()-0.5)*12,1,-70-i*60);
+    const obstacleType = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+    let geometry, material, scale = 1;
+    
+    switch(obstacleType) {
+      case 'cone':
+        geometry = new THREE.ConeGeometry(0.5, 2, 8);
+        material = new THREE.MeshStandardMaterial({ color: obstacleColor });
+        break;
+      case 'barrel':
+        geometry = new THREE.CylinderGeometry(0.8, 0.8, 1.5, 12);
+        material = new THREE.MeshStandardMaterial({ color: 0x8B4513, metalness: 0.8 });
+        break;
+      case 'debris':
+        geometry = new THREE.BoxGeometry(1 + Math.random(), 0.5 + Math.random(), 1 + Math.random());
+        material = new THREE.MeshStandardMaterial({ color: obstacleColor });
+        break;
+      case 'guardrail':
+        geometry = new THREE.BoxGeometry(0.2, 1, 3);
+        material = new THREE.MeshStandardMaterial({ color: 0xFFFFFF });
+        break;
+      case 'cactus':
+        geometry = new THREE.CylinderGeometry(0.3, 0.3, 3, 8);
+        material = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+        break;
+      case 'rock':
+        geometry = new THREE.DodecahedronGeometry(1 + Math.random() * 2);
+        material = new THREE.MeshStandardMaterial({ color: obstacleColor });
+        break;
+      case 'tree':
+        geometry = new THREE.CylinderGeometry(0.5, 0.5, 4);
+        material = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        scale = 1.5;
+        break;
+      case 'boulder':
+        geometry = new THREE.IcosahedronGeometry(2 + Math.random() * 3);
+        material = new THREE.MeshStandardMaterial({ color: obstacleColor });
+        break;
+      case 'dumpster':
+        geometry = new THREE.BoxGeometry(2, 1.5, 1);
+        material = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        break;
+      case 'neon_sign':
+        geometry = new THREE.PlaneGeometry(2, 1);
+        material = new THREE.MeshStandardMaterial({ color: obstacleColor, emissive: obstacleColor });
+        break;
+      case 'snowbank':
+        geometry = new THREE.BoxGeometry(3, 1, 2);
+        material = new THREE.MeshStandardMaterial({ color: obstacleColor });
+        break;
+      case 'ice':
+        geometry = new THREE.BoxGeometry(2, 0.1, 2);
+        material = new THREE.MeshStandardMaterial({ color: 0x87CEEB, transparent: true, opacity: 0.7 });
+        break;
+      default:
+        geometry = new THREE.BoxGeometry(2,2,4);
+        material = new THREE.MeshStandardMaterial({ color: obstacleColor });
+    }
+    
+    const o = new THREE.Mesh(geometry, material);
+    o.scale.setScalar(scale);
+    o.position.set((Math.random()-0.5)*12, o.geometry.parameters.height ? o.geometry.parameters.height/2 * scale : 1, -70-i*60);
+    o.userData = { type: obstacleType, damage: 0, maxDamage: 3 };
     scene.add(o);
     obstacles.push(o);
   }
@@ -1249,9 +1545,15 @@ for(let i=0; i<7; i++){
     powerups: Math.floor(Math.random()*3),
     nitro: 100,
     progress: 0,
-    name: aiNames[i]
+    name: aiNames[i],
+    damage: 0,
+    maxDamage: 150, // AI can take more damage
+    damageParts: []
   };
   scene.add(ai);
+  if (!ai || !ai.isObject3D) {
+    console.error('AI car is not a valid THREE.Object3D');
+  }
   aiCars.push(ai);
   const aiLabel = document.createElement('div');
   aiLabel.textContent = ai.userData.name;
@@ -1374,15 +1676,19 @@ function animate(){
   let steer = 0;
   if (keys['ArrowUp'] || joystickY < -0.1) accel = 1;
   if (keys['ArrowDown'] || joystickY > 0.1) accel = -1;
-  if (keys['ArrowLeft']) steer -= 1;
-  if (keys['ArrowRight']) steer += 1;
+  if (keys['ArrowLeft']) steer += 1;
+  if (keys['ArrowRight']) steer -= 1;
   steer += joystickX;
   if (!joystickActive) steer += tiltX; // Use tilt when not touching joystick
   steer = Math.max(-1, Math.min(1, steer));
 
   speed += accel * physics.accel * dt;
   speed *= physics.friction;
-  speed = THREE.MathUtils.clamp(speed,-physics.maxSpeed,physics.maxSpeed);
+  
+  // Damage affects max speed
+  const damageMultiplier = 1 - (car.userData.damage * physics.damageSpeedReduction);
+  const effectiveMaxSpeed = physics.maxSpeed * damageMultiplier;
+  speed = THREE.MathUtils.clamp(speed, -effectiveMaxSpeed, effectiveMaxSpeed);
 
   drifting = Math.abs(steer)>0 && Math.abs(speed)>120;
   if(drifting){ driftAngle += steer*dt*3; driftAngle *= physics.driftGrip; }
@@ -1469,12 +1775,16 @@ function animate(){
       ai.userData.speed += 200;
     }
 
+    // Damage affects AI speed
+    const aiDamageMultiplier = 1 - (ai.userData.damage * 0.01); // 1% speed reduction per damage
+    const effectiveAISpeed = ai.userData.speed * aiDamageMultiplier;
+
     const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(ai.quaternion);
     const side = new THREE.Vector3(1,0,0).applyQuaternion(ai.quaternion);
 
     ai.position.add(
-      fwd.multiplyScalar(ai.userData.speed * dt * 0.05)
-        .add(side.multiplyScalar(ai.userData.driftAngle * ai.userData.speed * dt * 0.03))
+      fwd.multiplyScalar(effectiveAISpeed * dt * 0.05)
+        .add(side.multiplyScalar(ai.userData.driftAngle * effectiveAISpeed * dt * 0.03))
     );
 
     // Oil slick effect for AI
@@ -1485,11 +1795,40 @@ function animate(){
       }
     });
 
-    // AI collision with player - only abilities hit, not collisions
-    // Collisions are now just contact, damage only from abilities (projectiles)
+    // AI collision with player
     if(ai.position.distanceTo(car.position) < 3){
-      // No damage from collision, only from abilities
-      ai.userData.hitCount += 1;
+      const now = Date.now() / 1000;
+      if(now - lastHitTime >= hitCooldown){
+        if(!shield){
+          playerHits += 1;
+          lastHitTime = now;
+          // Apply damage to car and AI
+          applyCarDamage(car, 15);
+          applyCarDamage(ai, 10); // AI takes damage too
+          
+          // Realistic physics: bounce back
+          const direction = new THREE.Vector3().subVectors(car.position, ai.position).normalize();
+          speed *= -physics.bounce * 0.5; // Less bounce for AI collisions
+          car.position.add(direction.multiplyScalar(1.5));
+          
+          // Add hit visual effect
+          createHitEffect(car.position.clone());
+          if (hitSound) playSound(hitSound);
+          // Flash screen red
+          flashScreen(0xff0000, 0.3);
+        } else {
+          shield = false;
+          shieldTime = 0;
+        }
+        if(playerHits >= 20){
+          speed = 0;
+          gameEnded = true;
+          stopMusic();
+          if (loseMusic) playSound(loseMusic);
+          document.getElementById('loseScreen').style.display = 'flex';
+        }
+      }
+      ai.userData.hitCount += 1; // Still damage AI
     }
 
     // AI respawn disabled - no new AIs will spawn
@@ -1508,11 +1847,37 @@ function animate(){
   // Obstacle collision
   for(const o of obstacles){
     if(car.position.distanceTo(o.position) < 3){
-      speed = 0;
-      gameEnded = true;
-      stopMusic();
-      if (loseMusic) playSound(loseMusic);
-      document.getElementById('loseScreen').style.display = 'flex';
+      const now = Date.now() / 1000;
+      if(now - lastHitTime >= hitCooldown){
+        if(!shield){
+          playerHits += 1;
+          lastHitTime = now;
+          // Apply damage to car and obstacle
+          applyCarDamage(car, 10);
+          applyObstacleDamage(o, 1);
+          
+          // Realistic physics: bounce back
+          const direction = new THREE.Vector3().subVectors(car.position, o.position).normalize();
+          speed *= -physics.bounce; // Reverse and reduce speed
+          car.position.add(direction.multiplyScalar(2)); // Push car away
+          
+          // Add hit visual effect
+          createHitEffect(car.position.clone());
+          if (hitSound) playSound(hitSound);
+          // Flash screen red
+          flashScreen(0xff0000, 0.3);
+        } else {
+          shield = false;
+          shieldTime = 0;
+        }
+        if(playerHits >= 20){
+          speed = 0;
+          gameEnded = true;
+          stopMusic();
+          if (loseMusic) playSound(loseMusic);
+          document.getElementById('loseScreen').style.display = 'flex';
+        }
+      }
       break;
     }
   }
@@ -1522,33 +1887,84 @@ function animate(){
   if(car.position.z < -1700 && car.position.z > -1900){
     const distanceFromCenter = Math.sqrt(car.position.x * car.position.x + (car.position.y - 10) * (car.position.y - 10));
     if(distanceFromCenter > 20){
-      speed = 0;
-      gameEnded = true;
-      stopMusic();
-      if (loseMusic) playSound(loseMusic);
-      document.getElementById('loseScreen').style.display = 'flex';
+      const now = Date.now() / 1000;
+      if(now - lastHitTime >= hitCooldown){
+        if(!shield){
+          playerHits += 1;
+          lastHitTime = now;
+          // Add hit visual effect
+          createHitEffect(car.position.clone());
+          if (hitSound) playSound(hitSound);
+          // Flash screen red
+          flashScreen(0xff0000, 0.3);
+        } else {
+          shield = false;
+          shieldTime = 0;
+        }
+        if(playerHits >= 20){
+          speed = 0;
+          gameEnded = true;
+          stopMusic();
+          if (loseMusic) playSound(loseMusic);
+          document.getElementById('loseScreen').style.display = 'flex';
+        }
+      }
     }
   }
   // Tunnel 2: z -725 to -875, radius 18, center y=9
   if(car.position.z < -725 && car.position.z > -875){
     const distanceFromCenter = Math.sqrt(car.position.x * car.position.x + (car.position.y - 9) * (car.position.y - 9));
     if(distanceFromCenter > 18){
-      speed = 0;
-      gameEnded = true;
-      stopMusic();
-      if (loseMusic) playSound(loseMusic);
-      document.getElementById('loseScreen').style.display = 'flex';
+      const now = Date.now() / 1000;
+      if(now - lastHitTime >= hitCooldown){
+        if(!shield){
+          playerHits += 1;
+          lastHitTime = now;
+          // Add hit visual effect
+          createHitEffect(car.position.clone());
+          if (hitSound) playSound(hitSound);
+          // Flash screen red
+          flashScreen(0xff0000, 0.3);
+        } else {
+          shield = false;
+          shieldTime = 0;
+        }
+        if(playerHits >= 20){
+          speed = 0;
+          gameEnded = true;
+          stopMusic();
+          if (loseMusic) playSound(loseMusic);
+          document.getElementById('loseScreen').style.display = 'flex';
+        }
+      }
     }
   }
   // Tunnel 3: z -1140 to -1260, radius 16, center y=8
   if(car.position.z < -1140 && car.position.z > -1260){
     const distanceFromCenter = Math.sqrt(car.position.x * car.position.x + (car.position.y - 8) * (car.position.y - 8));
     if(distanceFromCenter > 16){
-      speed = 0;
-      gameEnded = true;
-      stopMusic();
-      if (loseMusic) playSound(loseMusic);
-      document.getElementById('loseScreen').style.display = 'flex';
+      const now = Date.now() / 1000;
+      if(now - lastHitTime >= hitCooldown){
+        if(!shield){
+          playerHits += 1;
+          lastHitTime = now;
+          // Add hit visual effect
+          createHitEffect(car.position.clone());
+          if (hitSound) playSound(hitSound);
+          // Flash screen red
+          flashScreen(0xff0000, 0.3);
+        } else {
+          shield = false;
+          shieldTime = 0;
+        }
+        if(playerHits >= 20){
+          speed = 0;
+          gameEnded = true;
+          stopMusic();
+          if (loseMusic) playSound(loseMusic);
+          document.getElementById('loseScreen').style.display = 'flex';
+        }
+      }
     }
   }
 
@@ -1662,6 +2078,7 @@ function animate(){
   camera.lookAt(car.position);
 
   document.getElementById('speed').innerText = Math.abs(speed).toFixed(0);
+  document.getElementById('damage').innerText = ((car.userData.damage / car.userData.maxDamage) * 100).toFixed(0);
   document.getElementById('hits').innerText = playerHits;
   document.getElementById('powerups').innerText = powerups.join(', ');
   document.getElementById('shield').innerText = shield ? 'Yes' : 'No';
